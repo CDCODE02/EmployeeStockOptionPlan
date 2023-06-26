@@ -1,111 +1,125 @@
-pragma solidity ^0.8.0;
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.9;
 
-contract EmployeeStockOptionPlan {
-    address private owner;
-
-    struct VestingSchedule {
-        uint256 cliffDuration;
-        uint256 totalVestingDuration;
-        uint256 startTime;
-        uint256 totalOptions;
-        uint256 vestedOptions;
-        uint256 exercisedOptions;
-        uint256[] monthlyVesting;
+/**
+ * @title EmployeeStockOptionPlan
+ * @dev A smart contract for managing an Employee Stock Option Plan.
+ * This contract allows Zarttech to grant stock options to employees,
+ * set a vesting schedule for the options, exercise vested options,
+ * track vested and exercised options, and transfer vested options.
+ */
+contract EmployeeStockOptionPlan {  
+    address private owner; // Company address
+    
+    struct Employee {
+        uint256 grantAmount; // Number of granted options
+        uint256 vestedAmount; // Number of vested options
+        uint256 exercisedAmount; // Number of exercised options
+        uint256 vestingStart; // Vesting start timestamp
+        uint256 vestingDuration; // Vesting duration in seconds
+        address transferTo; // Address to which vested options can be transferred
     }
+    
+    mapping(address => Employee) private employees;  
 
-    mapping(address => VestingSchedule) private vestingSchedules;
-
-    event StockOptionsGranted(address indexed employee, uint256 amount);
-    event VestingScheduleSet(address indexed employee, uint256 cliffDuration, uint256 totalVestingDuration);
-    event OptionsExercised(address indexed employee, uint256 amount);
-
+    event StockOptionsGranted(address indexed employee, uint256 amount); // The StockOptionsGranted event
+    event VestingScheduleSet(address indexed employee, uint256 start, uint256 duration); // The VestingScheduleSet event
+    event OptionsExercised(address indexed employee, uint256 amount); // The OptionsExercised event
+    event OptionsTransferred(address indexed from, address indexed to, uint256 amount); // The OptionsTransferred event
+    
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only the contract owner can call this function.");
+        _;
+    }
+    
+    modifier onlyEmployee() {
+        require(employees[msg.sender].grantAmount > 0, "You are not an authorized employee.");
+        _;
+    }
+    
     constructor() {
         owner = msg.sender;
     }
-
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Only contract owner can call this function");
-        _;
-    }
-
-    modifier onlyEmployee() {
-        require(vestingSchedules[msg.sender].totalOptions > 0, "Only employees can call this function");
-        _;
-    }
-
-    function grantStockOptions(address employee, uint256 amount) public onlyOwner {
-        require(amount > 0, "Amount must be greater than 0");
-        require(vestingSchedules[employee].totalOptions == 0, "Employee already has stock options");
-
-        vestingSchedules[employee].totalOptions = amount;
-
+    
+    /**
+     * @dev Grant stock options to an employee.
+     * @param employee The address of the employee.
+     * @param amount The number of options to be granted.
+     */
+    function grantStockOptions(address employee, uint256 amount) external onlyOwner {
+        require(amount > 0, "Invalid option amount.");
+        employees[employee].grantAmount += amount;
         emit StockOptionsGranted(employee, amount);
     }
-
-    function setVestingSchedule(
-        address employee,
-        uint256 cliffDuration,
-        uint256 totalVestingDuration,
-        uint256[] memory monthlyVesting
-    ) public onlyOwner {
-        require(cliffDuration <= totalVestingDuration, "Cliff duration must be less than or equal to total vesting duration");
-        require(monthlyVesting.length == totalVestingDuration, "Invalid vesting schedule");
-
-        vestingSchedules[employee].cliffDuration = cliffDuration;
-        vestingSchedules[employee].totalVestingDuration = totalVestingDuration;
-        vestingSchedules[employee].monthlyVesting = monthlyVesting;
-        vestingSchedules[employee].startTime = block.timestamp;
-
-        emit VestingScheduleSet(employee, cliffDuration, totalVestingDuration);
+    
+    /**
+     * @dev Set the vesting schedule for an employee's options.
+     * @param employee The address of the employee.
+     * @param start The vesting start timestamp.
+     * @param duration The vesting duration in seconds.
+     */
+    function setVestingSchedule(address employee, uint256 start, uint256 duration) external onlyOwner {
+        require(employees[employee].grantAmount > 0, "Employee does not have any granted options.");
+        require(start > block.timestamp, "Vesting start must be in the future.");
+        require(duration > 0, "Invalid vesting duration.");
+        
+        employees[employee].vestingStart = start;
+        employees[employee].vestingDuration = duration;
+        emit VestingScheduleSet(employee, start, duration);
     }
-
-    function exerciseOptions(uint256 amount) public onlyEmployee {
-        require(amount > 0, "Amount must be greater than 0");
-
-        VestingSchedule storage vestingSchedule = vestingSchedules[msg.sender];
-
-        require(vestingSchedule.vestedOptions >= vestingSchedule.exercisedOptions + amount, "Not enough vested options");
-
-        vestingSchedule.exercisedOptions += amount;
-
+    
+    /**
+     * @dev Exercise vested options.
+     * @param amount The number of options to be exercised.
+     */
+    function exerciseOptions(uint256 amount) external onlyEmployee {
+        Employee storage employee = employees[msg.sender];
+        require(employee.vestedAmount >= amount, "Insufficient vested options.");
+        
+        employee.vestedAmount -= amount;
+        employee.exercisedAmount += amount;
         emit OptionsExercised(msg.sender, amount);
     }
-
-    function getVestedOptions(address employee) public view returns (uint256) {
-        VestingSchedule storage vestingSchedule = vestingSchedules[employee];
-
-        if (block.timestamp < vestingSchedule.startTime + vestingSchedule.cliffDuration) {
-            return 0;
-        }
-
-        if (block.timestamp >= vestingSchedule.startTime + vestingSchedule.totalVestingDuration) {
-            return vestingSchedule.totalOptions;
-        }
-
-        uint256 passedMonths = (block.timestamp - vestingSchedule.startTime) / 30 days;
-
-        uint256 vestedOptions = 0;
-        for (uint256 i = 0; i <= passedMonths; i++) {
-            vestedOptions += vestingSchedule.monthlyVesting[i];
-        }
-
-        return vestedOptions;
+    
+    /**
+     * @dev Get the number of vested options for an employee.
+     * @param employee The address of the employee.
+     * @return The number of vested options.
+     */
+    function getVestedOptions(address employee) external view returns (uint256) {
+        return employees[employee].vestedAmount;
     }
-
-    function getExercisedOptions(address employee) public view returns (uint256) {
-        return vestingSchedules[employee].exercisedOptions;
+    
+    /**
+     * @dev Get the number of exercised options for an employee.
+     * @param employee The address of the employee.
+     * @return The number of exercised options.
+     */
+    function getExercisedOptions(address employee) external view returns (uint256) {
+        return employees[employee].exercisedAmount;
     }
-
-    function transferOptions(address to, uint256 amount) public onlyEmployee {
-        require(amount > 0, "Amount must be greater than 0");
-
-        VestingSchedule storage vestingSchedule = vestingSchedules[msg.sender];
-
-        require(vestingSchedule.vestedOptions >= vestingSchedule.exercisedOptions + amount, "Not enough vested options");
-
-        vestingSchedule.exercisedOptions += amount;
-        vestingSchedules[to].totalOptions += amount;
-
-        emit OptionsExercised(msg.sender, amount);
+    
+    /**
+     * @dev Transfer vested options to another employee.
+     * @param to The address of the receiver.
+     * @param amount The number of options to be transferred.
+     */
+    function transferOptions(address to, uint256 amount) external onlyEmployee {
+        Employee storage fromEmployee = employees[msg.sender];
+        Employee storage toEmployee = employees[to];
+        
+        require(fromEmployee.vestedAmount >= amount, "Insufficient vested options.");
+        require(toEmployee.transferTo == address(0), "The receiver is not eligible to receive options.");
+        
+        fromEmployee.vestedAmount -= amount;
+        toEmployee.vestedAmount += amount;
+        toEmployee.transferTo = to;
+        
+        // Reset transferred options to prevent further transfers
+        if (fromEmployee.vestedAmount == 0) {
+            fromEmployee.transferTo = address(0);
+        }
+        
+        emit OptionsTransferred(msg.sender, to, amount);
     }
 }
